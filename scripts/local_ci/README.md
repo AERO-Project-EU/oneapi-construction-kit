@@ -44,13 +44,51 @@ ccache  spirv-tools  libhwloc-dev  zstd
 Required pip packages: `colorama lit psutil`
 
 The container image used by CI is `ghcr.io/uxlfoundation/ock_ubuntu_22.04-aarch64:latest`
-(built from `.github/dockerfiles/Dockerfile_22.04-aarch64`). You can use it directly:
+(built from `.github/dockerfiles/Dockerfile_22.04-aarch64`).
+
+### Running inside Docker (avoids sudo requirements on the host)
+
+The script uses `sudo` only to install system packages and LLVM. If you don't
+have sudo on the host, run the script inside the CI container instead — you are
+root inside the container so all `sudo` calls succeed without a password.
+
+**Step 1 — Check Docker access:**
+
+```bash
+# Does the docker group exist?
+getent group docker
+
+# Is your user in it?
+groups $USER
+```
+
+If you get `permission denied while trying to connect to the Docker socket`, fix it with one of:
+
+```bash
+# Add yourself to the docker group (requires sudo once, then no sudo for docker):
+sudo usermod -aG docker $USER
+newgrp docker          # apply without logging out
+
+# Or use Podman — a rootless drop-in replacement (replace 'docker' with 'podman'):
+sudo apt-get install -y podman
+```
+
+**Step 2 — Pull and run:**
 
 ```bash
 docker pull ghcr.io/uxlfoundation/ock_ubuntu_22.04-aarch64:latest
+
 docker run --rm -it \
   -v $PWD:/workspace \
+  -v $HOME/ock_ci_workspace:/root/ock_ci_workspace \
   ghcr.io/uxlfoundation/ock_ubuntu_22.04-aarch64:latest bash
+```
+
+**Step 3 — Inside the container, run the script normally:**
+
+```bash
+cd /workspace
+WORKSPACE=/root/ock_ci_workspace ./scripts/local_ci/run_ci.sh
 ```
 
 ---
