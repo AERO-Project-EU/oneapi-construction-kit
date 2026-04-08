@@ -4,9 +4,10 @@
 # =============================================================================
 # Replicates the following GitHub Actions jobs from run_ock_external_tests.yml:
 #
-#   a) SYCL-CTS               (build_sycl_cts_aarch64 + run_sycl_cts_aarch64)
-#   b) SYCL on Native CPU     (e2e with DPC++ native_cpu backend, no OCK)
-#   c) DPC++ e2e via OpenCL   (run_sycl_e2e_aarch64 with OCK as OpenCL ICD)
+#   a) SYCL-CTS via OpenCL    (build_sycl_cts_aarch64 + run_sycl_cts_aarch64)
+#   b) DPC++ e2e via OpenCL   (run_sycl_e2e_aarch64 with OCK as OpenCL ICD)
+#   c) DPC++ e2e via native_cpu (e2e with DPC++ native_cpu backend, no OCK)
+#   d) SYCL-CTS via native_cpu  (opt-in, no OCK)
 #
 # Dependencies (installed by step_setup_deps if missing):
 #   cmake ninja-build python3 python3-pip git wget gpg ccache
@@ -28,6 +29,7 @@ set -euo pipefail
 : "${ARCH:=aarch64}"                       # aarch64 or x86_64
 : "${JOBS:=$(nproc)}"                      # Parallel build jobs
 : "${DPCPP_SOURCE:=download_release}"      # 'download_release' or 'build'
+: "${LOG_FILE:=}"                          # If set, tee all output to this file
 
 # Step toggles: set 1=enabled, 0=skip
 : "${STEP_SETUP_DEPS:=1}"       # Install system packages if missing
@@ -36,9 +38,10 @@ set -euo pipefail
 : "${STEP_BUILD_ICD:=1}"        # Build OpenCL Headers + ICD Loader
 : "${STEP_BUILD_DPCPP:=1}"      # Get DPC++ (download or build from source)
 : "${STEP_BUILD_SYCL_CTS:=1}"   # Build SYCL-CTS binaries
-: "${STEP_RUN_SYCL_CTS:=1}"     # a) Run SYCL-CTS
-: "${STEP_RUN_E2E_OPENCL:=1}"   # c) Run DPC++ e2e via OpenCL (OCK)
-: "${STEP_RUN_E2E_NATIVE_CPU:=0}" # b) Run DPC++ e2e via native_cpu (opt-in)
+: "${STEP_RUN_SYCL_CTS:=1}"              # a) Run SYCL-CTS via OpenCL
+: "${STEP_RUN_E2E_OPENCL:=1}"           # b) Run DPC++ e2e via OpenCL (OCK)
+: "${STEP_RUN_E2E_NATIVE_CPU:=0}"       # c) Run DPC++ e2e via native_cpu (opt-in)
+: "${STEP_RUN_SYCL_CTS_NATIVE_CPU:=0}"  # d) Run SYCL-CTS via native_cpu (opt-in)
 
 # Force rebuild even if artifact directories already exist
 : "${FORCE_REBUILD:=0}"
@@ -83,6 +86,7 @@ Replicates OCK GitHub Actions CI pipelines locally on Linux ARM.
 
 BUILD OPTIONS:
   --workspace DIR       Working dir for all artifacts  [default: ~/ock_ci_workspace]
+  --log-file FILE       Tee all output to FILE (in addition to stdout)
   --llvm-version VER    LLVM major version: 20, 21     [default: 20]
   --arch ARCH           Target arch: aarch64, x86_64   [default: aarch64]
   --jobs N              Parallel build jobs            [default: nproc = $(nproc)]
@@ -91,38 +95,43 @@ BUILD OPTIONS:
   --force-rebuild       Rebuild artifacts even if they already exist
 
 STEP SELECTION:
-  --only-sycl-cts       Build everything + run only SYCL-CTS (a)
-  --only-e2e-opencl     Build everything + run only DPC++ e2e via OpenCL (c)
-  --only-e2e-native     Build everything + run only DPC++ e2e via Native CPU (b)
-  --all-tests           Run all three test suites (enables native CPU)
-  --tests-only          Skip all build steps, only run tests (artifacts must exist)
-  --skip-llvm           Skip LLVM installation step
-  --skip-ock-build      Skip OCK build step
-  --skip-dpcpp          Skip DPC++ build step
-  --with-native-cpu     Also run DPC++ e2e via native_cpu backend (b)
-  --no-sycl-cts         Disable SYCL-CTS run
-  --no-e2e-opencl       Disable DPC++ e2e via OpenCL run
+  --only-sycl-cts           Build everything + run only SYCL-CTS via OpenCL (a)
+  --only-sycl-cts-native    Build everything + run only SYCL-CTS via native_cpu (d)
+  --only-e2e-opencl         Build everything + run only DPC++ e2e via OpenCL (b)
+  --only-e2e-native         Build everything + run only DPC++ e2e via native_cpu (c)
+  --all-tests               Run all four test suites
+  --tests-only              Skip all build steps, only run tests (artifacts must exist)
+  --skip-llvm               Skip LLVM installation step
+  --skip-ock-build          Skip OCK build step
+  --skip-dpcpp              Skip DPC++ build step
+  --with-native-cpu         Also run DPC++ e2e via native_cpu (c)
+  --with-sycl-cts-native    Also run SYCL-CTS via native_cpu (d)
+  --no-sycl-cts             Disable SYCL-CTS via OpenCL run
+  --no-e2e-opencl           Disable DPC++ e2e via OpenCL run
 
 ENVIRONMENT OVERRIDES:
   WORKSPACE, LLVM_VERSION, ARCH, JOBS, DPCPP_SOURCE, FORCE_REBUILD
   STEP_SETUP_DEPS, STEP_SETUP_LLVM, STEP_BUILD_OCK, STEP_BUILD_ICD,
   STEP_BUILD_DPCPP, STEP_BUILD_SYCL_CTS, STEP_RUN_SYCL_CTS,
-  STEP_RUN_E2E_OPENCL, STEP_RUN_E2E_NATIVE_CPU
+  STEP_RUN_E2E_OPENCL, STEP_RUN_E2E_NATIVE_CPU, STEP_RUN_SYCL_CTS_NATIVE_CPU
 
 EXAMPLES:
   # Full run (builds everything, runs SYCL-CTS + e2e via OpenCL):
   $0
 
-  # Only SYCL-CTS (still builds all required artifacts):
+  # Run all four test suites:
+  $0 --all-tests
+
+  # Only SYCL-CTS via OpenCL (still builds all required artifacts):
   $0 --only-sycl-cts
+
+  # Only SYCL-CTS via native_cpu:
+  $0 --only-sycl-cts-native
 
   # Re-run tests without rebuilding (artifacts from previous run):
   $0 --tests-only
 
-  # Run all tests including Native CPU:
-  $0 --all-tests
-
-  # Build DPC++ from source instead of downloading:
+  # Build DPC++ from source instead of downloading (required for aarch64):
   $0 --dpcpp-source build
 
   # Rebuild OCK only:
@@ -140,33 +149,43 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --workspace)        WORKSPACE="$2";       shift 2 ;;
+        --log-file)         LOG_FILE="$2";        shift 2 ;;
         --llvm-version)     LLVM_VERSION="$2";    shift 2 ;;
         --arch)             ARCH="$2"; TARGET="host_${ARCH}_linux"; shift 2 ;;
         --jobs)             JOBS="$2";             shift 2 ;;
         --dpcpp-source)     DPCPP_SOURCE="$2";    shift 2 ;;
         --force-rebuild)    FORCE_REBUILD=1;       shift ;;
         --only-sycl-cts)
-            STEP_RUN_SYCL_CTS=1; STEP_RUN_E2E_OPENCL=0; STEP_RUN_E2E_NATIVE_CPU=0
+            STEP_RUN_SYCL_CTS=1; STEP_RUN_E2E_OPENCL=0
+            STEP_RUN_E2E_NATIVE_CPU=0; STEP_RUN_SYCL_CTS_NATIVE_CPU=0
+            shift ;;
+        --only-sycl-cts-native)
+            STEP_RUN_SYCL_CTS=0; STEP_RUN_E2E_OPENCL=0
+            STEP_RUN_E2E_NATIVE_CPU=0; STEP_RUN_SYCL_CTS_NATIVE_CPU=1
             shift ;;
         --only-e2e-opencl)
-            STEP_RUN_SYCL_CTS=0; STEP_RUN_E2E_OPENCL=1; STEP_RUN_E2E_NATIVE_CPU=0
+            STEP_RUN_SYCL_CTS=0; STEP_RUN_E2E_OPENCL=1
+            STEP_RUN_E2E_NATIVE_CPU=0; STEP_RUN_SYCL_CTS_NATIVE_CPU=0
             STEP_BUILD_SYCL_CTS=0
             shift ;;
         --only-e2e-native)
-            STEP_RUN_SYCL_CTS=0; STEP_RUN_E2E_OPENCL=0; STEP_RUN_E2E_NATIVE_CPU=1
+            STEP_RUN_SYCL_CTS=0; STEP_RUN_E2E_OPENCL=0
+            STEP_RUN_E2E_NATIVE_CPU=1; STEP_RUN_SYCL_CTS_NATIVE_CPU=0
             STEP_BUILD_SYCL_CTS=0
             shift ;;
         --all-tests)
-            STEP_RUN_SYCL_CTS=1; STEP_RUN_E2E_OPENCL=1; STEP_RUN_E2E_NATIVE_CPU=1
+            STEP_RUN_SYCL_CTS=1; STEP_RUN_E2E_OPENCL=1
+            STEP_RUN_E2E_NATIVE_CPU=1; STEP_RUN_SYCL_CTS_NATIVE_CPU=1
             shift ;;
         --tests-only)
             STEP_SETUP_DEPS=0; STEP_SETUP_LLVM=0; STEP_BUILD_OCK=0
             STEP_BUILD_ICD=0; STEP_BUILD_DPCPP=0; STEP_BUILD_SYCL_CTS=0
             shift ;;
-        --skip-llvm)        STEP_SETUP_LLVM=0;    shift ;;
-        --skip-ock-build)   STEP_BUILD_OCK=0;     shift ;;
-        --skip-dpcpp)       STEP_BUILD_DPCPP=0;   shift ;;
-        --with-native-cpu)  STEP_RUN_E2E_NATIVE_CPU=1; shift ;;
+        --skip-llvm)             STEP_SETUP_LLVM=0;           shift ;;
+        --skip-ock-build)        STEP_BUILD_OCK=0;            shift ;;
+        --skip-dpcpp)            STEP_BUILD_DPCPP=0;          shift ;;
+        --with-native-cpu)       STEP_RUN_E2E_NATIVE_CPU=1;   shift ;;
+        --with-sycl-cts-native)  STEP_RUN_SYCL_CTS_NATIVE_CPU=1; shift ;;
         --no-sycl-cts)      STEP_RUN_SYCL_CTS=0; STEP_BUILD_SYCL_CTS=0; shift ;;
         --no-e2e-opencl)    STEP_RUN_E2E_OPENCL=0; shift ;;
         -h|--help)          usage ;;
@@ -190,6 +209,11 @@ DPCPP_INSTALL="$WORKSPACE/dpcpp/${ARCH}-linux/install"
 
 mkdir -p "$WORKSPACE"
 
+if [[ -n "$LOG_FILE" ]]; then
+    exec > >(tee -a "$LOG_FILE") 2>&1
+    echo "[$(date '+%H:%M:%S')] Logging to $LOG_FILE"
+fi
+
 log "OCK Local CI — Configuration"
 cat <<EOF
   OCK source  : $OCK_SRC
@@ -207,6 +231,7 @@ cat <<EOF
     run_sycl_cts=$STEP_RUN_SYCL_CTS
     run_e2e_opencl=$STEP_RUN_E2E_OPENCL
     run_e2e_native_cpu=$STEP_RUN_E2E_NATIVE_CPU
+    run_sycl_cts_native_cpu=$STEP_RUN_SYCL_CTS_NATIVE_CPU
 EOF
 
 # =============================================================================
@@ -356,14 +381,19 @@ step_build_dpcpp() {
     log "STEP 4: Get DPC++ (${DPCPP_SOURCE})"
 
     if should_skip "$DPCPP_INSTALL/bin/clang++"; then
-        ok "DPC++ already at $DPCPP_INSTALL — skipping"
-        return
+        if "$DPCPP_INSTALL/bin/clang++" --version >/dev/null 2>&1; then
+            ok "DPC++ already at $DPCPP_INSTALL — skipping"
+            return
+        else
+            warn "DPC++ at $DPCPP_INSTALL exists but is not executable on this arch — rebuilding"
+            rm -rf "$DPCPP_INSTALL"
+        fi
     fi
 
-    mkdir -p "$DPCPP_INSTALL"
-
     if [[ "$DPCPP_SOURCE" == "download_release" ]]; then
+        [[ "$ARCH" == "aarch64" ]] && die "intel/llvm does not publish aarch64 nightly binaries. Use --dpcpp-source build for aarch64."
         log "  Downloading latest nightly DPC++ release from intel/llvm..."
+        mkdir -p "$DPCPP_INSTALL"
         local downloaded=0
         for counter in {0..13}; do
             local datestamp
@@ -394,12 +424,17 @@ step_build_dpcpp() {
         done
 
         cd "$dpcpp_src"
+        local native_cpu_opt=()
+        [[ $STEP_RUN_E2E_NATIVE_CPU -eq 1 || $STEP_RUN_SYCL_CTS_NATIVE_CPU -eq 1 ]] \
+            && native_cpu_opt=(--native_cpu)
+
         python3 buildbot/configure.py -o "build/${ARCH}-linux" \
             --host-target="X86;AArch64;RISCV" \
             --llvm-external-projects=lld \
             --cmake-opt=-DLLVM_ENABLE_ZLIB=OFF \
             --cmake-opt=-DLLVM_ENABLE_ZSTD=OFF \
-            --cmake-opt=-DLLVM_CCACHE_BUILD=ON
+            --cmake-opt=-DLLVM_CCACHE_BUILD=ON \
+            "${native_cpu_opt[@]}"
 
         cmake --build "build/${ARCH}-linux" -- sycl-headers
         python3 buildbot/compile.py -o "build/${ARCH}-linux" -v -j "${JOBS}"
@@ -418,6 +453,12 @@ step_build_dpcpp() {
         done
 
         cd "$WORKSPACE"
+
+        # Symlink the build install into the canonical DPCPP_INSTALL location so
+        # that all downstream steps find clang++ at the expected path.
+        rm -rf "$DPCPP_INSTALL"
+        mkdir -p "$(dirname "$DPCPP_INSTALL")"
+        ln -s "$dpcpp_src/build/${ARCH}-linux/install" "$DPCPP_INSTALL"
     fi
 
     ok "DPC++ → $DPCPP_INSTALL"
@@ -429,10 +470,13 @@ step_build_dpcpp() {
 step_build_sycl_cts() {
     log "STEP 5: Build SYCL-CTS"
 
-    if should_skip "$WORKSPACE/SYCL-CTS/bin"; then
+    if should_skip "$WORKSPACE/SYCL-CTS/bin" \
+            && [[ -n "$(ls -A "$WORKSPACE/SYCL-CTS/bin" 2>/dev/null)" ]]; then
         ok "SYCL-CTS already at $WORKSPACE/SYCL-CTS/bin — skipping"
         return
     fi
+    # bin/ exists but is empty (e.g. from a previously failed build) — wipe and rebuild
+    rm -rf "$WORKSPACE/SYCL-CTS"
 
     if [[ ! -d "$WORKSPACE/SYCL-CTS.src" ]]; then
         git clone --recurse-submodules \
@@ -442,7 +486,17 @@ step_build_sycl_cts() {
 
     # Apply OCK-specific SYCL-CTS patches
     for patch in "$OCK_SRC"/scripts/testing/patches/SYCL-CTS-*.patch; do
-        [[ -f "$patch" ]] && { log "  Applying ${patch##*/}"; git -C "$WORKSPACE/SYCL-CTS.src" apply "$patch"; }
+        [[ -f "$patch" ]] || continue
+        log "  Applying ${patch##*/}"
+        # Skip if already applied (e.g. from a previous interrupted run)
+        if git -C "$WORKSPACE/SYCL-CTS.src" apply --check --reverse "$patch" 2>/dev/null; then
+            ok "  ${patch##*/} already applied — skipping"
+            continue
+        fi
+        # Try direct apply first; if context has drifted, fall back to 3-way merge
+        git -C "$WORKSPACE/SYCL-CTS.src" apply "$patch" 2>/dev/null \
+            || git -C "$WORKSPACE/SYCL-CTS.src" apply --3way "$patch" \
+            || die "Failed to apply patch: ${patch##*/}"
     done
 
     # Build all test categories (CI splits A/B/C in parallel; we build sequentially)
@@ -514,10 +568,44 @@ run_sycl_cts() {
 }
 
 # =============================================================================
-# Test c) DPC++ e2e via OpenCL (OCK as ICD)
+# Test d) SYCL-CTS via native_cpu (DPC++ native_cpu backend, no OCK)
+# =============================================================================
+run_sycl_cts_native_cpu() {
+    log "TEST d) SYCL-CTS via native_cpu  (target=${TARGET}, llvm=${LLVM_VERSION})"
+
+    [[ -d "$WORKSPACE/SYCL-CTS/bin" ]] \
+        || die "SYCL-CTS binaries not found. Run with STEP_BUILD_SYCL_CTS=1 first."
+
+    export ONEAPI_DEVICE_SELECTOR=native_cpu:*
+    export LD_LIBRARY_PATH="${DPCPP_INSTALL}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    unset OCL_ICD_FILENAMES
+
+    python3 "$OCK_SRC/scripts/testing/create_override_csv.py" \
+        -d "$OCK_SRC/scripts/testing/sycl_cts" \
+        -k "${TARGET}" "llvm_${LLVM_VERSION}" \
+        -o "$WORKSPACE/sycl_cts_native_override.csv" -vv
+
+    python3 "$OCK_SRC/scripts/testing/run_cities.py" \
+        --color=always \
+        --timeout 03:30:00 \
+        -p sycl_cts \
+        -b "$WORKSPACE/SYCL-CTS/bin" \
+        -L "$WORKSPACE/SYCL-CTS/lib" \
+        -s "$OCK_SRC/scripts/testing/sycl_cts/tests.csv" \
+        -l "$WORKSPACE/sycl_cts_native.log" \
+        -f "$WORKSPACE/sycl_cts_native.fail" \
+        -r "$WORKSPACE/sycl_cts_native.xml" \
+        -v \
+        -o "$WORKSPACE/sycl_cts_native_override.csv"
+
+    ok "SYCL-CTS (native_cpu) results: $WORKSPACE/sycl_cts_native.log"
+}
+
+# =============================================================================
+# Test b) DPC++ e2e via OpenCL (OCK as ICD)
 # =============================================================================
 run_sycl_e2e_opencl() {
-    log "TEST c) DPC++ e2e via OpenCL  (target=${TARGET})"
+    log "TEST b) DPC++ e2e via OpenCL  (target=${TARGET})"
 
     [[ -f "$OCK_INSTALL/lib/libCL.so" ]] \
         || die "OCK libCL.so not found. Run with STEP_BUILD_OCK=1 first."
@@ -564,7 +652,7 @@ run_sycl_e2e_opencl() {
 # Test b) DPC++ e2e via Native CPU (DPC++ native_cpu backend, no OCK)
 # =============================================================================
 run_sycl_e2e_native_cpu() {
-    log "TEST b) DPC++ e2e via Native CPU  (target=${TARGET})"
+    log "TEST c) DPC++ e2e via Native CPU  (target=${TARGET})"
 
     _ensure_sycl_e2e_src
 
@@ -610,8 +698,9 @@ run_sycl_e2e_native_cpu() {
 [[ $STEP_BUILD_DPCPP    -eq 1 ]] && step_build_dpcpp
 [[ $STEP_BUILD_SYCL_CTS -eq 1 ]] && step_build_sycl_cts
 
-[[ $STEP_RUN_SYCL_CTS       -eq 1 ]] && run_sycl_cts
-[[ $STEP_RUN_E2E_OPENCL     -eq 1 ]] && run_sycl_e2e_opencl
-[[ $STEP_RUN_E2E_NATIVE_CPU -eq 1 ]] && run_sycl_e2e_native_cpu
+[[ $STEP_RUN_SYCL_CTS            -eq 1 ]] && run_sycl_cts
+[[ $STEP_RUN_SYCL_CTS_NATIVE_CPU -eq 1 ]] && run_sycl_cts_native_cpu
+[[ $STEP_RUN_E2E_OPENCL          -eq 1 ]] && run_sycl_e2e_opencl
+[[ $STEP_RUN_E2E_NATIVE_CPU      -eq 1 ]] && run_sycl_e2e_native_cpu
 
 log "All requested steps completed."
