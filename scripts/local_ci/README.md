@@ -4,26 +4,39 @@ Replicates the following GitHub Actions jobs from `run_ock_external_tests.yml` l
 
 | Label | CI Job | Description |
 |-------|--------|-------------|
-| a) | `build_sycl_cts_aarch64` + `run_sycl_cts_aarch64` | SYCL-CTS |
-| b) | *(opt-in)* | DPC++ e2e via `native_cpu` backend |
-| c) | `run_sycl_e2e_aarch64` | DPC++ e2e via OpenCL (OCK as ICD) |
+| a) | `build_sycl_cts_aarch64` + `run_sycl_cts_aarch64` | SYCL-CTS via OpenCL (OCK as ICD) |
+| b) | `run_sycl_e2e_aarch64` | DPC++ e2e via OpenCL (OCK as ICD) |
+| c) | *(opt-in)* | DPC++ e2e via `native_cpu` backend (no OCK) |
+| d) | *(opt-in)* | SYCL-CTS via `native_cpu` backend (no OCK) |
 
 ---
 
 ## Quick Start
 
+> **aarch64:** intel/llvm does not publish aarch64 nightly binaries.
+> You must pass `--dpcpp-source build` (builds DPC++ from source, ~2–4 h).
+
 ```bash
-# Full run — builds everything, then runs SYCL-CTS + DPC++ e2e via OpenCL:
+# Full run on aarch64 — builds everything, then runs SYCL-CTS (a) + DPC++ e2e via OpenCL (b):
+WORKSPACE=/root/ock_ci_workspace ./scripts/local_ci/run_ci.sh --dpcpp-source build
+
+# x86_64 — can download a prebuilt nightly instead:
 ./scripts/local_ci/run_ci.sh
 
-# Only SYCL-CTS (a):
-./scripts/local_ci/run_ci.sh --only-sycl-cts
+# All four test suites (a + b + c + d):
+./scripts/local_ci/run_ci.sh --dpcpp-source build --all-tests
 
-# Only DPC++ e2e via OpenCL (c):
-./scripts/local_ci/run_ci.sh --only-e2e-opencl
+# Only SYCL-CTS via OpenCL (a):
+./scripts/local_ci/run_ci.sh --dpcpp-source build --only-sycl-cts
 
-# All test categories including Native CPU (b):
-./scripts/local_ci/run_ci.sh --all-tests
+# Only SYCL-CTS via native_cpu (d):
+./scripts/local_ci/run_ci.sh --dpcpp-source build --only-sycl-cts-native
+
+# Only DPC++ e2e via OpenCL (b):
+./scripts/local_ci/run_ci.sh --dpcpp-source build --only-e2e-opencl
+
+# Only DPC++ e2e via native_cpu (c):
+./scripts/local_ci/run_ci.sh --dpcpp-source build --only-e2e-native
 
 # Re-run tests without rebuilding (artifacts from a previous run):
 ./scripts/local_ci/run_ci.sh --tests-only
@@ -93,6 +106,80 @@ WORKSPACE=/root/ock_ci_workspace ./scripts/local_ci/run_ci.sh
 
 ---
 
+## Running unattended (SSH-safe)
+
+The full run takes many hours. Use one of the patterns below so the job
+survives an SSH disconnect.
+
+### Option 1 — nohup (always available)
+
+```bash
+nohup bash -c '
+  WORKSPACE=/root/ock_ci_workspace \
+  ./scripts/local_ci/run_ci.sh \
+    --dpcpp-source build \
+    --all-tests \
+    --log-file /root/ock_ci_workspace/ci_run.log
+' &
+echo "PID $!"
+disown
+```
+
+Monitor progress from another shell:
+
+```bash
+tail -f /root/ock_ci_workspace/ci_run.log
+```
+
+Check whether it is still running:
+
+```bash
+ps aux | grep run_ci
+```
+
+### Option 2 — screen (reattachable session)
+
+```bash
+screen -dmS ock_ci bash -c '
+  WORKSPACE=/root/ock_ci_workspace \
+  ./scripts/local_ci/run_ci.sh \
+    --dpcpp-source build \
+    --all-tests \
+    --log-file /root/ock_ci_workspace/ci_run.log
+'
+
+# Reattach at any time:
+screen -r ock_ci
+```
+
+### Option 3 — tmux (reattachable session)
+
+```bash
+tmux new-session -d -s ock_ci \
+  'WORKSPACE=/root/ock_ci_workspace \
+   ./scripts/local_ci/run_ci.sh \
+     --dpcpp-source build \
+     --all-tests \
+     --log-file /root/ock_ci_workspace/ci_run.log'
+
+# Reattach at any time:
+tmux attach -t ock_ci
+```
+
+### Log files written by the script
+
+| File | Contents |
+|------|----------|
+| `$WORKSPACE/ci_run.log` | Full script output (when `--log-file` is used) |
+| `$WORKSPACE/sycl_cts.log` | SYCL-CTS (OpenCL) results |
+| `$WORKSPACE/sycl_cts.fail` | SYCL-CTS (OpenCL) failures only |
+| `$WORKSPACE/sycl_cts.xml` | SYCL-CTS (OpenCL) JUnit XML |
+| `$WORKSPACE/sycl_cts_native.log` | SYCL-CTS (native_cpu) results |
+| `$WORKSPACE/sycl_cts_native.fail` | SYCL-CTS (native_cpu) failures only |
+| `$WORKSPACE/sycl_cts_native.xml` | SYCL-CTS (native_cpu) JUnit XML |
+
+---
+
 ## Build Pipeline
 
 Each step caches its output directory. If the target already exists, the step is
@@ -143,15 +230,20 @@ The install directory is pruned to match the CI artifact (only `libCL.so`, `clc`
 
 Two options controlled by `--dpcpp-source`:
 
-| Option | Description | Time |
-|--------|-------------|------|
-| `download_release` *(default)* | Downloads latest nightly tarball from `intel/llvm` GitHub releases | ~5 min |
-| `build` | Clones `intel/llvm` and builds from source | 2–4 h on ARM |
+| Option | Description | Arch support | Time |
+|--------|-------------|--------------|------|
+| `download_release` *(default)* | Downloads latest nightly tarball from `intel/llvm` GitHub releases | **x86_64 only** | ~5 min |
+| `build` | Clones `intel/llvm` and builds from source | aarch64 + x86_64 | 2–4 h on ARM |
 
 When downloading, the script tries up to 14 days back to find a published nightly.
 
 OCK-specific patches from `scripts/testing/patches/DPCPP-*.patch` are applied
 when building from source.
+
+> **Workspace reuse across architectures:** if the `dpcpp/` directory in
+> `WORKSPACE` was populated on a different host architecture (e.g. x86_64
+> binaries in an aarch64 workspace), the script detects the mismatch at startup
+> and automatically removes the stale install before rebuilding.
 
 ### SYCL-CTS
 
@@ -179,16 +271,15 @@ sequentially.
 
 ## Test Execution
 
-### a) SYCL-CTS
+### a) SYCL-CTS via OpenCL
 
 ```bash
 ./scripts/local_ci/run_ci.sh --only-sycl-cts
 # or just the run step if artifacts exist:
-STEP_BUILD_SYCL_CTS=0 ./scripts/local_ci/run_ci.sh --only-sycl-cts --tests-only
+./scripts/local_ci/run_ci.sh --only-sycl-cts --tests-only
 ```
 
-Environment set by the script (matching `run_sycl_cts` action):
-
+Environment:
 ```bash
 ONEAPI_DEVICE_SELECTOR=opencl:0
 OCL_ICD_FILENAMES=$WORKSPACE/install/lib/libCL.so
@@ -201,16 +292,9 @@ Override/known files used:
 - `scripts/testing/sycl_cts/override_host_aarch64_linux.csv` — aarch64-specific
 - Per-LLVM-version overrides generated by `create_override_csv.py`
 
-Timeout: **3h 30m** (matches CI).
+Timeout: **3h 30m** (matches CI). Results: `$WORKSPACE/sycl_cts.{log,fail,xml}`
 
-Results written to:
-```
-$WORKSPACE/sycl_cts.log
-$WORKSPACE/sycl_cts.fail
-$WORKSPACE/sycl_cts.xml
-```
-
-### c) DPC++ e2e via OpenCL
+### b) DPC++ e2e via OpenCL
 
 ```bash
 ./scripts/local_ci/run_ci.sh --only-e2e-opencl
@@ -222,8 +306,7 @@ Clones `intel/llvm` (sparse: `sycl/test-e2e` only) and configures with:
 -DSYCL_TEST_E2E_TARGETS=opencl:cpu
 ```
 
-`OCL_ICD_FILENAMES` is set to OCK's `libCL.so` so that all OpenCL calls go through
-OCK's host backend.
+`OCL_ICD_FILENAMES` is set to OCK's `libCL.so` so all OpenCL calls go through OCK's host backend.
 
 Override/known files used:
 - `scripts/testing/sycl_e2e/known.csv`
@@ -232,7 +315,7 @@ Override/known files used:
 
 Timeout: **30 min** (1800 s, matches CI).
 
-### b) DPC++ e2e via Native CPU (opt-in)
+### c) DPC++ e2e via native_cpu (opt-in)
 
 ```bash
 ./scripts/local_ci/run_ci.sh --with-native-cpu
@@ -246,12 +329,31 @@ Configures the e2e suite with:
 -DSYCL_TEST_E2E_TARGETS=native_cpu:cpu
 ```
 
-Uses `ONEAPI_DEVICE_SELECTOR=native_cpu:*`. Does **not** use OCK — this exercises
-DPC++'s own native CPU SYCL backend.
+Uses `ONEAPI_DEVICE_SELECTOR=native_cpu:*`. Does **not** use OCK.
 
-> **Note:** This is disabled by default because the repo's override CSV files are
-> tuned for the OpenCL path. Expect a higher unknown/fail count until
-> `scripts/testing/sycl_e2e/` is extended with native_cpu-specific overrides.
+### d) SYCL-CTS via native_cpu (opt-in)
+
+```bash
+./scripts/local_ci/run_ci.sh --with-sycl-cts-native
+# or only this suite:
+./scripts/local_ci/run_ci.sh --only-sycl-cts-native
+```
+
+Runs the same SYCL-CTS binaries (built in step 5) with `ONEAPI_DEVICE_SELECTOR=native_cpu:*`
+instead of `opencl:0`. Does **not** use OCK.
+
+Environment:
+```bash
+ONEAPI_DEVICE_SELECTOR=native_cpu:*
+LD_LIBRARY_PATH=<dpcpp>/lib
+```
+
+Timeout: **3h 30m**. Results: `$WORKSPACE/sycl_cts_native.{log,fail,xml}`
+
+> **Note:** `c)` and `d)` are disabled by default. The override CSV files are currently
+> tuned for the OpenCL path, so expect a higher unknown/fail count until
+> `scripts/testing/sycl_cts/` and `scripts/testing/sycl_e2e/` are extended with
+> native_cpu-specific override files.
 
 ---
 
@@ -261,25 +363,27 @@ DPC++'s own native CPU SYCL backend.
 ./scripts/local_ci/run_ci.sh [OPTIONS]
 
 BUILD OPTIONS:
-  --workspace DIR       Working dir for all artifacts  [default: ~/ock_ci_workspace]
-  --llvm-version VER    LLVM major version: 20, 21     [default: 20]
-  --arch ARCH           Target arch: aarch64, x86_64   [default: aarch64]
-  --jobs N              Parallel build jobs            [default: nproc]
-  --dpcpp-source SRC    'download_release' or 'build'  [default: download_release]
-  --force-rebuild       Rebuild artifacts even if they already exist
+  --workspace DIR           Working dir for all artifacts  [default: ~/ock_ci_workspace]
+  --llvm-version VER        LLVM major version: 20, 21     [default: 20]
+  --arch ARCH               Target arch: aarch64, x86_64   [default: aarch64]
+  --jobs N                  Parallel build jobs            [default: nproc]
+  --dpcpp-source SRC        'download_release' or 'build'  [default: download_release]
+  --force-rebuild           Rebuild artifacts even if they already exist
 
 STEP SELECTION:
-  --only-sycl-cts       Build everything + run only SYCL-CTS (a)
-  --only-e2e-opencl     Build everything + run only DPC++ e2e via OpenCL (c)
-  --only-e2e-native     Build everything + run only DPC++ e2e via Native CPU (b)
-  --all-tests           Run all three test suites (enables native CPU)
-  --tests-only          Skip all build steps, only run tests
-  --skip-llvm           Skip LLVM installation step
-  --skip-ock-build      Skip OCK build step
-  --skip-dpcpp          Skip DPC++ build step
-  --with-native-cpu     Also run DPC++ e2e via native_cpu (b)
-  --no-sycl-cts         Disable SYCL-CTS run
-  --no-e2e-opencl       Disable DPC++ e2e via OpenCL run
+  --only-sycl-cts           Build everything + run only SYCL-CTS via OpenCL (a)
+  --only-sycl-cts-native    Build everything + run only SYCL-CTS via native_cpu (d)
+  --only-e2e-opencl         Build everything + run only DPC++ e2e via OpenCL (b)
+  --only-e2e-native         Build everything + run only DPC++ e2e via native_cpu (c)
+  --all-tests               Run all four test suites (a + b + c + d)
+  --tests-only              Skip all build steps, only run tests
+  --skip-llvm               Skip LLVM installation step
+  --skip-ock-build          Skip OCK build step
+  --skip-dpcpp              Skip DPC++ build step
+  --with-native-cpu         Also run DPC++ e2e via native_cpu (c)
+  --with-sycl-cts-native    Also run SYCL-CTS via native_cpu (d)
+  --no-sycl-cts             Disable SYCL-CTS via OpenCL run
+  --no-e2e-opencl           Disable DPC++ e2e via OpenCL run
 ```
 
 All flags can also be set as environment variables:
@@ -301,8 +405,8 @@ STEP_RUN_E2E_NATIVE_CPU=1 \
 | Install LLVM via apt | 3–5 min |
 | Build OCK | 10–20 min |
 | Build ICD + Headers | 2–3 min |
-| Download DPC++ nightly | 5–10 min |
-| Build DPC++ from source | 2–4 h |
+| Download DPC++ nightly *(x86_64 only)* | 5–10 min |
+| Build DPC++ from source *(required for aarch64)* | 2–4 h |
 | Build SYCL-CTS (all, `-j4`) | 1–2 h |
 | Run SYCL-CTS | up to 3h 30m |
 | Run DPC++ e2e (OpenCL) | up to 30 min |
@@ -340,6 +444,55 @@ STEP_RUN_E2E_NATIVE_CPU=1 \
 
 ---
 
+## Troubleshooting
+
+### `clang++` not found after `--dpcpp-source build`
+
+When building DPC++ from source, `buildbot/compile.py` installs into
+`llvm_dpcpp/build/<arch>-linux/install/` inside the workspace. The script
+creates a symlink from the canonical `dpcpp/<arch>-linux/install/` path to that
+location automatically. If the symlink is missing (e.g. from an interrupted
+earlier run before the fix), create it manually:
+
+```bash
+ln -s /root/ock_ci_workspace/llvm_dpcpp/build/aarch64-linux/install \
+      /root/ock_ci_workspace/dpcpp/aarch64-linux/install
+```
+
+Then resume without re-running the completed build steps:
+
+```bash
+WORKSPACE=/root/ock_ci_workspace \
+  STEP_SETUP_DEPS=0 STEP_SETUP_LLVM=0 STEP_BUILD_OCK=0 STEP_BUILD_ICD=0 STEP_BUILD_DPCPP=0 \
+  ./scripts/local_ci/run_ci.sh --dpcpp-source build
+```
+
+### `Exec format error` for `clang++` (wrong architecture)
+
+If the workspace was previously used on a different host architecture, the
+cached `clang++` binary will be the wrong ELF type. The script now detects this
+and removes the stale install automatically. If you hit this on an older version
+of the script, remove it manually:
+
+```bash
+rm -rf /root/ock_ci_workspace/dpcpp/aarch64-linux/install
+```
+
+Then re-run with `--dpcpp-source build`.
+
+### SYCL-CTS patch fails to apply
+
+If a patch was partially applied during a previous interrupted run, `git apply`
+will fail on the next attempt. The script now detects already-applied patches
+and skips them, and falls back to `--3way` if upstream context lines have
+drifted. If you hit this on an older version, reset the source tree:
+
+```bash
+git -C /root/ock_ci_workspace/SYCL-CTS.src checkout -- .
+```
+
+---
+
 ## Relationship to CI Actions
 
 | Script step | GitHub Actions action/job |
@@ -349,6 +502,7 @@ STEP_RUN_E2E_NATIVE_CPU=1 \
 | `step_build_icd` | `.github/actions/do_build_icd` |
 | `step_build_dpcpp` | `.github/actions/do_build_dpcpp` |
 | `step_build_sycl_cts` | `.github/actions/do_build_sycl_cts` |
-| `run_sycl_cts` | `.github/actions/run_sycl_cts` |
-| `run_sycl_e2e_opencl` | `.github/actions/do_build_run_sycl_e2e` |
-| `run_sycl_e2e_native_cpu` | *(no existing CI job — native_cpu variant)* |
+| `run_sycl_cts` (a) | `.github/actions/run_sycl_cts` |
+| `run_sycl_e2e_opencl` (b) | `.github/actions/do_build_run_sycl_e2e` |
+| `run_sycl_e2e_native_cpu` (c) | *(no existing CI job — native_cpu e2e variant)* |
+| `run_sycl_cts_native_cpu` (d) | *(no existing CI job — native_cpu SYCL-CTS variant)* |
