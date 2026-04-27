@@ -419,7 +419,9 @@ step_build_ock_tests() {
         -DCA_CL_ENABLE_ICD_LOADER=ON \
         -DOCL_EXTENSION_cl_khr_command_buffer=ON \
         -DOCL_EXTENSION_cl_khr_command_buffer_mutable_dispatch=ON \
-        -DOCL_EXTENSION_cl_khr_extended_async_copies=ON \
+        -DCA_ENABLE_HOST_IMAGE_SUPPORT=ON \
+	-DCA_HOST_ENABLE_FP16=ON \
+	-DOCL_EXTENSION_cl_khr_extended_async_copies=ON \
         "$OCK_SRC"
 
     # Pre-build UnitCL so the run step is just `check-ock-UnitCL`
