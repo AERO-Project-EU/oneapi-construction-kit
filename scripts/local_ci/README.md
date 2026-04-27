@@ -8,6 +8,7 @@ Replicates the following GitHub Actions jobs from `run_ock_external_tests.yml` l
 | b) | `run_sycl_e2e_aarch64` | DPC++ e2e via OpenCL (OCK as ICD) |
 | c) | *(opt-in)* | DPC++ e2e via `native_cpu` backend (no OCK) |
 | d) | *(opt-in)* | SYCL-CTS via `native_cpu` backend (no OCK) |
+| e) | *(opt-in)* | OCK UnitCL — OCK's own OpenCL test suite via `ninja check-ock-UnitCL` |
 
 ---
 
@@ -37,6 +38,9 @@ WORKSPACE=/root/ock_ci_workspace ./scripts/local_ci/run_ci.sh --dpcpp-source bui
 
 # Only DPC++ e2e via native_cpu (c):
 ./scripts/local_ci/run_ci.sh --dpcpp-source build --only-e2e-native
+
+# Only OCK UnitCL (e) — does NOT need DPC++ or SYCL-CTS:
+./scripts/local_ci/run_ci.sh --only-ock-unitcl
 
 # Re-run tests without rebuilding (artifacts from a previous run):
 ./scripts/local_ci/run_ci.sh --tests-only
@@ -177,6 +181,7 @@ tmux attach -t ock_ci
 | `$WORKSPACE/sycl_cts_native.log` | SYCL-CTS (native_cpu) results |
 | `$WORKSPACE/sycl_cts_native.fail` | SYCL-CTS (native_cpu) failures only |
 | `$WORKSPACE/sycl_cts_native.xml` | SYCL-CTS (native_cpu) JUnit XML |
+| `$WORKSPACE/ock_unitcl.log` | OCK UnitCL (`check-ock-UnitCL`) output |
 
 ---
 
@@ -186,12 +191,13 @@ Each step caches its output directory. If the target already exists, the step is
 skipped (override with `--force-rebuild`).
 
 ```
-Step 0  setup_deps    — apt install + pip install
-Step 1  setup_llvm    — install LLVM 20 from apt.llvm.org → llvm_install/
-Step 2  build_ock     — build OCK (libCL.so + clc)       → install/
-Step 3  build_icd     — OpenCL Headers + ICD Loader       → install_icd/  install_opencl_headers/
-Step 4  build_dpcpp   — get DPC++ (download or build)     → dpcpp/aarch64-linux/install/
-Step 5  build_sycl_cts— build SYCL-CTS binaries           → SYCL-CTS/bin/
+Step 0   setup_deps      — apt install + pip install
+Step 1   setup_llvm      — install LLVM 20 from apt.llvm.org → llvm_install/
+Step 2   build_ock       — build OCK artifact (libCL.so + clc, tests=OFF) → install/
+Step 3   build_icd       — OpenCL Headers + ICD Loader → install_icd/  install_opencl_headers/
+Step 3b  build_ock_tests — build OCK with CA_ENABLE_TESTS=ON (UnitCL) → build_ock_tests/  (opt-in)
+Step 4   build_dpcpp     — get DPC++ (download or build) → dpcpp/aarch64-linux/install/
+Step 5   build_sycl_cts  — build SYCL-CTS binaries → SYCL-CTS/bin/
 ```
 
 All artifacts are written to `WORKSPACE` (default: `~/ock_ci_workspace/`).
@@ -225,6 +231,31 @@ CMake flags used (matching `do_build_ock_artefact` + `do_build_ock` actions):
 ```
 
 The install directory is pruned to match the CI artifact (only `libCL.so`, `clc`, and `*.py` kept).
+
+### OCK Tests Build *(step 3b, opt-in)*
+
+A **separate build dir** (`build_ock_tests/`) is used when running OCK UnitCL (e),
+so the regular artifact build (step 2) stays clean and pruned.
+
+CMake flags used:
+
+```cmake
+-DCA_ENABLE_API=cl
+-DCA_MUX_TARGETS_TO_ENABLE=host
+-DCA_MUX_COMPILERS_TO_ENABLE=host
+-DCA_LLVM_INSTALL_DIR=<llvm_install>
+-DCMAKE_BUILD_TYPE=Release
+-DCA_ENABLE_TESTS=ON                              # required for check-* targets
+-DCA_CL_ENABLE_ICD_LOADER=ON
+-DOCL_EXTENSION_cl_khr_command_buffer=ON
+-DOCL_EXTENSION_cl_khr_command_buffer_mutable_dispatch=ON
+-DOCL_EXTENSION_cl_khr_extended_async_copies=ON
+```
+
+`spirv-as` (from the `spirv-tools` apt package, already a baseline dependency) is
+auto-discovered by CMake — no explicit `SpirvTools_spirv-as_EXECUTABLE` path needed.
+
+Triggered by `--with-ock-unitcl` or `--only-ock-unitcl` (also sets `STEP_BUILD_OCK_TESTS=1`).
 
 ### DPC++
 
@@ -355,6 +386,27 @@ Timeout: **3h 30m**. Results: `$WORKSPACE/sycl_cts_native.{log,fail,xml}`
 > `scripts/testing/sycl_cts/` and `scripts/testing/sycl_e2e/` are extended with
 > native_cpu-specific override files.
 
+### e) OCK UnitCL (opt-in)
+
+```bash
+./scripts/local_ci/run_ci.sh --only-ock-unitcl
+# or alongside other suites:
+./scripts/local_ci/run_ci.sh --with-ock-unitcl
+```
+
+Runs OCK's own OpenCL test suite (UnitCL) via `ninja check-ock-UnitCL`.
+Unlike (a)–(d), this does **not** depend on DPC++ or SYCL-CTS — it tests OCK's
+OpenCL implementation directly through the ICD loader. `--only-ock-unitcl`
+therefore disables the DPC++ and SYCL-CTS build steps automatically.
+
+Environment:
+```bash
+OCL_ICD_FILENAMES=$WORKSPACE/build_ock_tests/lib/libCL.so
+LD_LIBRARY_PATH=$WORKSPACE/build_ock_tests/lib
+```
+
+Results: `$WORKSPACE/ock_unitcl.log` (full ninja + gtest output).
+
 ---
 
 ## CLI Reference
@@ -375,13 +427,15 @@ STEP SELECTION:
   --only-sycl-cts-native    Build everything + run only SYCL-CTS via native_cpu (d)
   --only-e2e-opencl         Build everything + run only DPC++ e2e via OpenCL (b)
   --only-e2e-native         Build everything + run only DPC++ e2e via native_cpu (c)
-  --all-tests               Run all four test suites (a + b + c + d)
+  --only-ock-unitcl         Build OCK with tests + run only OCK UnitCL (e)
+  --all-tests               Run all four SYCL test suites (a + b + c + d, excludes UnitCL)
   --tests-only              Skip all build steps, only run tests
   --skip-llvm               Skip LLVM installation step
   --skip-ock-build          Skip OCK build step
   --skip-dpcpp              Skip DPC++ build step
   --with-native-cpu         Also run DPC++ e2e via native_cpu (c)
   --with-sycl-cts-native    Also run SYCL-CTS via native_cpu (d)
+  --with-ock-unitcl         Also build OCK tests + run OCK UnitCL (e)
   --no-sycl-cts             Disable SYCL-CTS via OpenCL run
   --no-e2e-opencl           Disable DPC++ e2e via OpenCL run
 ```
@@ -410,6 +464,8 @@ STEP_RUN_E2E_NATIVE_CPU=1 \
 | Build SYCL-CTS (all, `-j4`) | 1–2 h |
 | Run SYCL-CTS | up to 3h 30m |
 | Run DPC++ e2e (OpenCL) | up to 30 min |
+| Build OCK tests build (3b) | 15–30 min |
+| Run OCK UnitCL (e) | 10–30 min |
 
 ---
 
@@ -437,7 +493,10 @@ STEP_RUN_E2E_NATIVE_CPU=1 \
 ├── llvm_e2e/                            # intel/llvm sparse (sycl/test-e2e only)
 ├── build_e2e_opencl/                    # e2e cmake build (opencl:cpu)
 ├── build_e2e_native_cpu/                # e2e cmake build (native_cpu:cpu)
+├── build_ock_tests/                     # OCK build with tests=ON (UnitCL)
+│   └── bin/UnitCL                       # OCK's OpenCL test binary
 ├── sycl_cts.log / sycl_cts.fail / sycl_cts.xml
+├── ock_unitcl.log
 ├── e2e_opencl_known_override.csv
 └── e2e_native_known_override.csv
 ```
@@ -500,9 +559,11 @@ git -C /root/ock_ci_workspace/SYCL-CTS.src checkout -- .
 | `step_setup_llvm` | `.github/actions/setup_build` (`llvm_source=install`) |
 | `step_build_ock` | `.github/actions/do_build_ock_artefact` + `do_build_ock` |
 | `step_build_icd` | `.github/actions/do_build_icd` |
+| `step_build_ock_tests` (3b) | *(no existing external-CI job — local-only, tests=ON build for UnitCL)* |
 | `step_build_dpcpp` | `.github/actions/do_build_dpcpp` |
 | `step_build_sycl_cts` | `.github/actions/do_build_sycl_cts` |
 | `run_sycl_cts` (a) | `.github/actions/run_sycl_cts` |
 | `run_sycl_e2e_opencl` (b) | `.github/actions/do_build_run_sycl_e2e` |
 | `run_sycl_e2e_native_cpu` (c) | *(no existing CI job — native_cpu e2e variant)* |
 | `run_sycl_cts_native_cpu` (d) | *(no existing CI job — native_cpu SYCL-CTS variant)* |
+| `run_ock_unitcl` (e) | *(no external-CI job — internal `check-ock-UnitCL` target)* |

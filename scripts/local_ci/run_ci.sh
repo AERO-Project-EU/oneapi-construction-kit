@@ -8,6 +8,8 @@
 #   b) DPC++ e2e via OpenCL   (run_sycl_e2e_aarch64 with OCK as OpenCL ICD)
 #   c) DPC++ e2e via native_cpu (e2e with DPC++ native_cpu backend, no OCK)
 #   d) SYCL-CTS via native_cpu  (opt-in, no OCK)
+#   e) OCK UnitCL              (opt-in, ninja check-ock-UnitCL — OCK's own
+#                               OpenCL test suite, run via OCK's ICD loader)
 #
 # Dependencies (installed by step_setup_deps if missing):
 #   cmake ninja-build python3 python3-pip git wget gpg ccache
@@ -38,10 +40,12 @@ set -euo pipefail
 : "${STEP_BUILD_ICD:=1}"        # Build OpenCL Headers + ICD Loader
 : "${STEP_BUILD_DPCPP:=1}"      # Get DPC++ (download or build from source)
 : "${STEP_BUILD_SYCL_CTS:=1}"   # Build SYCL-CTS binaries
+: "${STEP_BUILD_OCK_TESTS:=0}"  # Build OCK with CA_ENABLE_TESTS=ON (for UnitCL)
 : "${STEP_RUN_SYCL_CTS:=1}"              # a) Run SYCL-CTS via OpenCL
 : "${STEP_RUN_E2E_OPENCL:=1}"           # b) Run DPC++ e2e via OpenCL (OCK)
 : "${STEP_RUN_E2E_NATIVE_CPU:=0}"       # c) Run DPC++ e2e via native_cpu (opt-in)
 : "${STEP_RUN_SYCL_CTS_NATIVE_CPU:=0}"  # d) Run SYCL-CTS via native_cpu (opt-in)
+: "${STEP_RUN_OCK_UNITCL:=0}"           # e) Run OCK UnitCL via check-ock-UnitCL (opt-in)
 
 # Force rebuild even if artifact directories already exist
 : "${FORCE_REBUILD:=0}"
@@ -60,6 +64,7 @@ OCL_HEADERS_INSTALL="$WORKSPACE/install_opencl_headers"
 DPCPP_INSTALL="$WORKSPACE/dpcpp/${ARCH}-linux/install"
 BUILD_E2E_OPENCL="$WORKSPACE/build_e2e_opencl"
 BUILD_E2E_NATIVE="$WORKSPACE/build_e2e_native_cpu"
+BUILD_OCK_TESTS="$WORKSPACE/build_ock_tests"
 
 # =============================================================================
 # Helpers
@@ -99,21 +104,24 @@ STEP SELECTION:
   --only-sycl-cts-native    Build everything + run only SYCL-CTS via native_cpu (d)
   --only-e2e-opencl         Build everything + run only DPC++ e2e via OpenCL (b)
   --only-e2e-native         Build everything + run only DPC++ e2e via native_cpu (c)
-  --all-tests               Run all four test suites
+  --only-ock-unitcl         Build OCK with tests + run only OCK UnitCL (e)
+  --all-tests               Run all four SYCL test suites (a/b/c/d, excludes UnitCL)
   --tests-only              Skip all build steps, only run tests (artifacts must exist)
   --skip-llvm               Skip LLVM installation step
   --skip-ock-build          Skip OCK build step
   --skip-dpcpp              Skip DPC++ build step
   --with-native-cpu         Also run DPC++ e2e via native_cpu (c)
   --with-sycl-cts-native    Also run SYCL-CTS via native_cpu (d)
+  --with-ock-unitcl         Also build OCK tests + run OCK UnitCL (e)
   --no-sycl-cts             Disable SYCL-CTS via OpenCL run
   --no-e2e-opencl           Disable DPC++ e2e via OpenCL run
 
 ENVIRONMENT OVERRIDES:
   WORKSPACE, LLVM_VERSION, ARCH, JOBS, DPCPP_SOURCE, FORCE_REBUILD
   STEP_SETUP_DEPS, STEP_SETUP_LLVM, STEP_BUILD_OCK, STEP_BUILD_ICD,
-  STEP_BUILD_DPCPP, STEP_BUILD_SYCL_CTS, STEP_RUN_SYCL_CTS,
-  STEP_RUN_E2E_OPENCL, STEP_RUN_E2E_NATIVE_CPU, STEP_RUN_SYCL_CTS_NATIVE_CPU
+  STEP_BUILD_DPCPP, STEP_BUILD_SYCL_CTS, STEP_BUILD_OCK_TESTS,
+  STEP_RUN_SYCL_CTS, STEP_RUN_E2E_OPENCL, STEP_RUN_E2E_NATIVE_CPU,
+  STEP_RUN_SYCL_CTS_NATIVE_CPU, STEP_RUN_OCK_UNITCL
 
 EXAMPLES:
   # Full run (builds everything, runs SYCL-CTS + e2e via OpenCL):
@@ -173,6 +181,12 @@ while [[ $# -gt 0 ]]; do
             STEP_RUN_E2E_NATIVE_CPU=1; STEP_RUN_SYCL_CTS_NATIVE_CPU=0
             STEP_BUILD_SYCL_CTS=0
             shift ;;
+        --only-ock-unitcl)
+            STEP_RUN_SYCL_CTS=0; STEP_RUN_E2E_OPENCL=0
+            STEP_RUN_E2E_NATIVE_CPU=0; STEP_RUN_SYCL_CTS_NATIVE_CPU=0
+            STEP_BUILD_OCK_TESTS=1; STEP_RUN_OCK_UNITCL=1
+            STEP_BUILD_SYCL_CTS=0; STEP_BUILD_DPCPP=0
+            shift ;;
         --all-tests)
             STEP_RUN_SYCL_CTS=1; STEP_RUN_E2E_OPENCL=1
             STEP_RUN_E2E_NATIVE_CPU=1; STEP_RUN_SYCL_CTS_NATIVE_CPU=1
@@ -180,12 +194,14 @@ while [[ $# -gt 0 ]]; do
         --tests-only)
             STEP_SETUP_DEPS=0; STEP_SETUP_LLVM=0; STEP_BUILD_OCK=0
             STEP_BUILD_ICD=0; STEP_BUILD_DPCPP=0; STEP_BUILD_SYCL_CTS=0
+            STEP_BUILD_OCK_TESTS=0
             shift ;;
         --skip-llvm)             STEP_SETUP_LLVM=0;           shift ;;
         --skip-ock-build)        STEP_BUILD_OCK=0;            shift ;;
         --skip-dpcpp)            STEP_BUILD_DPCPP=0;          shift ;;
         --with-native-cpu)       STEP_RUN_E2E_NATIVE_CPU=1;   shift ;;
         --with-sycl-cts-native)  STEP_RUN_SYCL_CTS_NATIVE_CPU=1; shift ;;
+        --with-ock-unitcl)       STEP_BUILD_OCK_TESTS=1; STEP_RUN_OCK_UNITCL=1; shift ;;
         --no-sycl-cts)      STEP_RUN_SYCL_CTS=0; STEP_BUILD_SYCL_CTS=0; shift ;;
         --no-e2e-opencl)    STEP_RUN_E2E_OPENCL=0; shift ;;
         -h|--help)          usage ;;
@@ -228,10 +244,12 @@ cat <<EOF
     setup_deps=$STEP_SETUP_DEPS  setup_llvm=$STEP_SETUP_LLVM
     build_ock=$STEP_BUILD_OCK    build_icd=$STEP_BUILD_ICD
     build_dpcpp=$STEP_BUILD_DPCPP  build_sycl_cts=$STEP_BUILD_SYCL_CTS
+    build_ock_tests=$STEP_BUILD_OCK_TESTS
     run_sycl_cts=$STEP_RUN_SYCL_CTS
     run_e2e_opencl=$STEP_RUN_E2E_OPENCL
     run_e2e_native_cpu=$STEP_RUN_E2E_NATIVE_CPU
     run_sycl_cts_native_cpu=$STEP_RUN_SYCL_CTS_NATIVE_CPU
+    run_ock_unitcl=$STEP_RUN_OCK_UNITCL
 EOF
 
 # =============================================================================
@@ -372,6 +390,41 @@ step_build_icd() {
         -GNinja
     ninja -C "$WORKSPACE/build_icd" install
     ok "ICD → $ICD_INSTALL"
+}
+
+# =============================================================================
+# Step: Build OCK with CA_ENABLE_TESTS=ON (separate build dir, for UnitCL)
+# =============================================================================
+step_build_ock_tests() {
+    log "STEP 3b: Build OCK with tests enabled (for UnitCL)"
+
+    if should_skip "$BUILD_OCK_TESTS/lib/libCL.so" \
+            && [[ -x "$BUILD_OCK_TESTS/bin/UnitCL" ]]; then
+        ok "OCK tests build already at $BUILD_OCK_TESTS — skipping"
+        return
+    fi
+
+    cmake -GNinja \
+        -B"$BUILD_OCK_TESTS" \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        -DCA_ENABLE_API=cl \
+        -DCA_MUX_TARGETS_TO_ENABLE=host \
+        -DCA_MUX_COMPILERS_TO_ENABLE=host \
+        -DCA_LLVM_INSTALL_DIR="$LLVM_INSTALL" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCA_ENABLE_TESTS=ON \
+        -DCA_ENABLE_EXAMPLES=OFF \
+        -DCA_ENABLE_DOCUMENTATION=OFF \
+        -DCA_CL_ENABLE_ICD_LOADER=ON \
+        -DOCL_EXTENSION_cl_khr_command_buffer=ON \
+        -DOCL_EXTENSION_cl_khr_command_buffer_mutable_dispatch=ON \
+        -DOCL_EXTENSION_cl_khr_extended_async_copies=ON \
+        "$OCK_SRC"
+
+    # Pre-build UnitCL so the run step is just `check-ock-UnitCL`
+    ninja -C "$BUILD_OCK_TESTS" -j"${JOBS}" UnitCL
+    ok "OCK tests build → $BUILD_OCK_TESTS"
 }
 
 # =============================================================================
@@ -689,18 +742,38 @@ run_sycl_e2e_native_cpu() {
 }
 
 # =============================================================================
+# Test e) OCK UnitCL (OCK's own OpenCL test suite, run via OCK ICD)
+# =============================================================================
+run_ock_unitcl() {
+    log "TEST e) OCK UnitCL  (target=${TARGET})"
+
+    [[ -x "$BUILD_OCK_TESTS/bin/UnitCL" ]] \
+        || die "OCK UnitCL binary not found at $BUILD_OCK_TESTS/bin/UnitCL. Run with STEP_BUILD_OCK_TESTS=1 first."
+
+    export OCL_ICD_FILENAMES="$BUILD_OCK_TESTS/lib/libCL.so"
+    export LD_LIBRARY_PATH="$BUILD_OCK_TESTS/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+    ninja -C "$BUILD_OCK_TESTS" check-ock-UnitCL 2>&1 \
+        | tee "$WORKSPACE/ock_unitcl.log"
+
+    ok "OCK UnitCL results: $WORKSPACE/ock_unitcl.log"
+}
+
+# =============================================================================
 # Main
 # =============================================================================
-[[ $STEP_SETUP_DEPS     -eq 1 ]] && step_setup_deps
-[[ $STEP_SETUP_LLVM     -eq 1 ]] && step_setup_llvm
-[[ $STEP_BUILD_OCK      -eq 1 ]] && step_build_ock
-[[ $STEP_BUILD_ICD      -eq 1 ]] && step_build_icd
-[[ $STEP_BUILD_DPCPP    -eq 1 ]] && step_build_dpcpp
-[[ $STEP_BUILD_SYCL_CTS -eq 1 ]] && step_build_sycl_cts
+[[ $STEP_SETUP_DEPS      -eq 1 ]] && step_setup_deps
+[[ $STEP_SETUP_LLVM      -eq 1 ]] && step_setup_llvm
+[[ $STEP_BUILD_OCK       -eq 1 ]] && step_build_ock
+[[ $STEP_BUILD_ICD       -eq 1 ]] && step_build_icd
+[[ $STEP_BUILD_OCK_TESTS -eq 1 ]] && step_build_ock_tests
+[[ $STEP_BUILD_DPCPP     -eq 1 ]] && step_build_dpcpp
+[[ $STEP_BUILD_SYCL_CTS  -eq 1 ]] && step_build_sycl_cts
 
 [[ $STEP_RUN_SYCL_CTS            -eq 1 ]] && run_sycl_cts
 [[ $STEP_RUN_SYCL_CTS_NATIVE_CPU -eq 1 ]] && run_sycl_cts_native_cpu
 [[ $STEP_RUN_E2E_OPENCL          -eq 1 ]] && run_sycl_e2e_opencl
 [[ $STEP_RUN_E2E_NATIVE_CPU      -eq 1 ]] && run_sycl_e2e_native_cpu
+[[ $STEP_RUN_OCK_UNITCL          -eq 1 ]] && run_ock_unitcl
 
 log "All requested steps completed."
