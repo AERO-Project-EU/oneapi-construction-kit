@@ -410,3 +410,11 @@ this project in the following ways:
 * Contribute to the oneAPI Construction Kit project. Read [CONTRIBUTING](./CONTRIBUTING.md) for more information.
 * Join the [Open Source and Specification Working Group](https://github.com/uxlfoundation/foundation/tree/main?tab=readme-ov-file#working-groups) meetings.
 * Join the mailing lists for the [UXL Foundation](https://lists.uxlfoundation.org/g/main/subgroups) to receive meetings schedule and latest updates.
+
+# Acknowledgements
+
+This work was partially supported by the European Union Horizon Europe & UKRI 
+[AERO 101092850](https://aero-project.eu/). 
+<img src="https://aero-project.eu/wp-content/uploads/elementor/thumbs/EU-flag-Horizon-Europe-q1yut7hwge8uq76yx4rtq2z6ogevtl3rm81fus95l2.jpg"
+     alt="EU Flag"
+     style="height:1em; vertical-align:middle;">
